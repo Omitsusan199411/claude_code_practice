@@ -38,6 +38,35 @@
             text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
         }
         
+        #bossHealthBar {
+            position: absolute;
+            top: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 400px;
+            height: 30px;
+            background-color: rgba(255, 255, 255, 0.2);
+            border: 2px solid #fff;
+            display: none;
+        }
+        
+        #bossHealthFill {
+            height: 100%;
+            background-color: #f00;
+            transition: width 0.3s ease-out;
+        }
+        
+        #bossName {
+            position: absolute;
+            top: 85px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #fff;
+            font-size: 24px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            display: none;
+        }
+        
         #gameOver {
             position: absolute;
             top: 50%;
@@ -111,19 +140,25 @@
         <div id="ui">
             <div>SCORE: <span id="score">0</span></div>
             <div>LIVES: <span id="lives">3</span></div>
+            <div>BOSS: <span id="bossCount">0</span></div>
         </div>
+        <div id="bossHealthBar">
+            <div id="bossHealthFill"></div>
+        </div>
+        <div id="bossName"></div>
         <div id="gameOver">
             <h2>GAME OVER</h2>
             <p>Final Score: <span id="finalScore">0</span></p>
+            <p>Bosses Defeated: <span id="finalBossCount">0</span></p>
             <button onclick="location.reload()">RETRY</button>
         </div>
         <div id="startScreen">
-            <h1>SPACE SHOOTER</h1>
+            <h1>BOSS SHOOTER</h1>
             <button onclick="startGame()">START GAME</button>
             <div class="controls">
                 <p>← → : 移動</p>
                 <p>SPACE : 射撃</p>
-                <p>敵を倒してハイスコアを目指せ！</p>
+                <p>ボスを倒して次のボスに挑戦！</p>
             </div>
         </div>
     </div>
@@ -135,22 +170,31 @@
         const gameOverScreen = document.getElementById('gameOver');
         const scoreEl = document.getElementById('score');
         const livesEl = document.getElementById('lives');
+        const bossCountEl = document.getElementById('bossCount');
         const finalScoreEl = document.getElementById('finalScore');
+        const finalBossCountEl = document.getElementById('finalBossCount');
+        const bossHealthBar = document.getElementById('bossHealthBar');
+        const bossHealthFill = document.getElementById('bossHealthFill');
+        const bossNameEl = document.getElementById('bossName');
 
         // ゲーム設定
         const PLAYER_SIZE = 30;
         const BULLET_SIZE = 4;
-        const ENEMY_SIZE = 25;
+        const BOSS_SIZE = 80;
         const PLAYER_SPEED = 7;
         const BULLET_SPEED = 12;
-        const ENEMY_SPEED = 3;
+        const BOSS_SPEED = 2;
+        const BOSS_BULLET_SPEED = 5;
 
         // ゲーム状態
         let gameRunning = false;
         let score = 0;
         let lives = 3;
+        let bossCount = 0;
         let lastShot = 0;
+        let lastBossShot = 0;
         const SHOT_COOLDOWN = 200;
+        const BOSS_SHOT_COOLDOWN = 1000;
 
         // ゲームオブジェクト
         let player = {
@@ -160,17 +204,38 @@
         };
 
         let bullets = [];
-        let enemies = [];
+        let bossBullets = [];
         let particles = [];
         let stars = [];
+        let boss = null;
+
+        // ボス画像
+        const bossImages = [];
+        
+        // ボス画像の読み込み
+        function loadBossImages() {
+            const boss1 = new Image();
+            boss1.src = 'sample_images/enemy.jpeg';
+            bossImages.push(boss1);
+            
+            const boss2 = new Image();
+            boss2.src = 'sample_images/enemy2.jpeg';
+            bossImages.push(boss2);
+        }
 
         // キー入力
         const keys = {};
         document.addEventListener('keydown', (e) => {
             keys[e.key] = true;
+            if (e.key === ' ') {
+                e.preventDefault();
+            }
         });
         document.addEventListener('keyup', (e) => {
             keys[e.key] = false;
+            if (e.key === ' ') {
+                e.preventDefault();
+            }
         });
 
         // 星背景の初期化
@@ -190,8 +255,31 @@
             gameRunning = true;
             startScreen.style.display = 'none';
             initStars();
+            loadBossImages();
+            spawnBoss();
             gameLoop();
-            spawnEnemies();
+        }
+
+        // ボスの生成
+        function spawnBoss() {
+            const imageIndex = bossCount % bossImages.length;
+            boss = {
+                x: canvas.width / 2,
+                y: -100,
+                size: BOSS_SIZE,
+                dy: BOSS_SPEED,
+                targetY: 150,
+                hp: 20 + bossCount * 10,
+                maxHp: 20 + bossCount * 10,
+                imageIndex: imageIndex,
+                name: imageIndex === 0 ? 'GHOST BOSS' : 'GOOMBA BOSS',
+                pattern: imageIndex === 0 ? 'circular' : 'spread'
+            };
+            
+            bossHealthBar.style.display = 'block';
+            bossNameEl.style.display = 'block';
+            bossNameEl.textContent = boss.name;
+            updateBossHealth();
         }
 
         // プレイヤー描画
@@ -263,91 +351,139 @@
             });
         }
 
-        // 敵の生成
-        function spawnEnemies() {
-            if (!gameRunning) return;
+        // ボスの更新と描画
+        function updateBoss() {
+            if (!boss) return;
             
-            if (Math.random() < 0.02 + score / 10000) {
-                enemies.push({
-                    x: Math.random() * (canvas.width - ENEMY_SIZE * 2) + ENEMY_SIZE,
-                    y: -ENEMY_SIZE,
-                    size: ENEMY_SIZE,
-                    dy: ENEMY_SPEED + Math.random() * 2,
-                    hp: 1,
-                    type: Math.random() < 0.8 ? 'normal' : 'strong'
-                });
+            // ボスの移動
+            if (boss.y < boss.targetY) {
+                boss.y += boss.dy;
+            } else {
+                // 左右に揺れる動き
+                boss.x = canvas.width / 2 + Math.sin(Date.now() * 0.001) * 100;
             }
             
-            setTimeout(spawnEnemies, 100);
+            // ボスの描画
+            if (bossImages[boss.imageIndex].complete) {
+                ctx.save();
+                ctx.drawImage(
+                    bossImages[boss.imageIndex],
+                    boss.x - boss.size / 2,
+                    boss.y - boss.size / 2,
+                    boss.size,
+                    boss.size
+                );
+                ctx.restore();
+            } else {
+                // 画像が読み込まれていない場合は代替表示
+                ctx.fillStyle = '#f0f';
+                ctx.fillRect(
+                    boss.x - boss.size / 2,
+                    boss.y - boss.size / 2,
+                    boss.size,
+                    boss.size
+                );
+            }
+            
+            // ボスの攻撃
+            if (Date.now() - lastBossShot > BOSS_SHOT_COOLDOWN && boss.y >= boss.targetY) {
+                bossShoots();
+                lastBossShot = Date.now();
+            }
         }
 
-        // 敵の更新と描画
-        function updateEnemies() {
-            enemies = enemies.filter(enemy => {
-                enemy.y += enemy.dy;
+        // ボスの攻撃
+        function bossShoots() {
+            if (!boss) return;
+            
+            if (boss.pattern === 'circular') {
+                // 円形弾幕
+                for (let i = 0; i < 8; i++) {
+                    const angle = (Math.PI * 2 / 8) * i;
+                    bossBullets.push({
+                        x: boss.x,
+                        y: boss.y,
+                        size: BULLET_SIZE * 1.5,
+                        dx: Math.sin(angle) * BOSS_BULLET_SPEED,
+                        dy: Math.cos(angle) * BOSS_BULLET_SPEED
+                    });
+                }
+            } else {
+                // 扇形弾幕
+                for (let i = -2; i <= 2; i++) {
+                    bossBullets.push({
+                        x: boss.x,
+                        y: boss.y,
+                        size: BULLET_SIZE * 1.5,
+                        dx: i * 2,
+                        dy: BOSS_BULLET_SPEED
+                    });
+                }
+            }
+        }
+
+        // ボス弾の更新
+        function updateBossBullets() {
+            bossBullets = bossBullets.filter(bullet => {
+                bullet.x += bullet.dx;
+                bullet.y += bullet.dy;
                 
                 // 画面外チェック
-                if (enemy.y > canvas.height + enemy.size) {
+                if (bullet.x < -bullet.size || bullet.x > canvas.width + bullet.size ||
+                    bullet.y < -bullet.size || bullet.y > canvas.height + bullet.size) {
                     return false;
                 }
                 
-                // 敵描画
-                if (enemy.type === 'normal') {
-                    ctx.fillStyle = '#f00';
-                } else {
-                    ctx.fillStyle = '#f0f';
-                    enemy.hp = 2;
-                }
-                
-                ctx.save();
-                ctx.translate(enemy.x, enemy.y);
-                ctx.rotate(Math.PI);
+                // 弾描画
+                ctx.fillStyle = '#f0f';
                 ctx.beginPath();
-                ctx.moveTo(0, -enemy.size);
-                ctx.lineTo(-enemy.size/2, enemy.size/2);
-                ctx.lineTo(enemy.size/2, enemy.size/2);
-                ctx.closePath();
+                ctx.arc(bullet.x, bullet.y, bullet.size, 0, Math.PI * 2);
                 ctx.fill();
-                ctx.restore();
                 
                 return true;
             });
         }
 
+        // ボスのHP更新
+        function updateBossHealth() {
+            if (!boss) return;
+            const healthPercent = (boss.hp / boss.maxHp) * 100;
+            bossHealthFill.style.width = healthPercent + '%';
+        }
+
         // 衝突判定
         function checkCollisions() {
-            // 弾と敵の衝突
-            bullets.forEach((bullet, bIndex) => {
-                enemies.forEach((enemy, eIndex) => {
-                    const dx = bullet.x - enemy.x;
-                    const dy = bullet.y - enemy.y;
+            // プレイヤー弾とボスの衝突
+            if (boss) {
+                bullets.forEach((bullet, bIndex) => {
+                    const dx = bullet.x - boss.x;
+                    const dy = bullet.y - boss.y;
                     const distance = Math.sqrt(dx * dx + dy * dy);
                     
-                    if (distance < bullet.size + enemy.size) {
+                    if (distance < bullet.size + boss.size / 2) {
                         bullets.splice(bIndex, 1);
-                        enemy.hp--;
+                        boss.hp--;
+                        updateBossHealth();
+                        createExplosion(bullet.x, bullet.y, 10);
                         
-                        if (enemy.hp <= 0) {
-                            createExplosion(enemy.x, enemy.y);
-                            enemies.splice(eIndex, 1);
-                            score += enemy.type === 'normal' ? 100 : 200;
-                            updateScore();
+                        if (boss.hp <= 0) {
+                            defeatedBoss();
                         }
                     }
                 });
-            });
+            }
             
-            // プレイヤーと敵の衝突
-            enemies.forEach((enemy, index) => {
-                const dx = player.x - enemy.x;
-                const dy = player.y - enemy.y;
+            // ボス弾とプレイヤーの衝突
+            bossBullets.forEach((bullet, index) => {
+                const dx = player.x - bullet.x;
+                const dy = player.y - bullet.y;
                 const distance = Math.sqrt(dx * dx + dy * dy);
                 
-                if (distance < player.size + enemy.size) {
-                    createExplosion(enemy.x, enemy.y);
-                    enemies.splice(index, 1);
+                if (distance < player.size + bullet.size) {
+                    bossBullets.splice(index, 1);
                     lives--;
                     updateLives();
+                    createExplosion(player.x, player.y, 20);
                     
                     if (lives <= 0) {
                         gameOver();
@@ -356,9 +492,27 @@
             });
         }
 
+        // ボス撃破
+        function defeatedBoss() {
+            score += 1000 * (bossCount + 1);
+            bossCount++;
+            updateScore();
+            updateBossCount();
+            createExplosion(boss.x, boss.y, 50);
+            boss = null;
+            bossBullets = [];
+            
+            // 2秒後に次のボス
+            setTimeout(() => {
+                if (gameRunning) {
+                    spawnBoss();
+                }
+            }, 2000);
+        }
+
         // 爆発エフェクト
-        function createExplosion(x, y) {
-            for (let i = 0; i < 20; i++) {
+        function createExplosion(x, y, count) {
+            for (let i = 0; i < count; i++) {
                 particles.push({
                     x: x,
                     y: y,
@@ -409,11 +563,19 @@
             livesEl.textContent = lives;
         }
 
+        // ボスカウント更新
+        function updateBossCount() {
+            bossCountEl.textContent = bossCount;
+        }
+
         // ゲームオーバー
         function gameOver() {
             gameRunning = false;
             finalScoreEl.textContent = score;
+            finalBossCountEl.textContent = bossCount;
             gameOverScreen.style.display = 'block';
+            bossHealthBar.style.display = 'none';
+            bossNameEl.style.display = 'none';
         }
 
         // ゲームループ
@@ -429,7 +591,8 @@
             handleInput();
             drawPlayer();
             updateBullets();
-            updateEnemies();
+            updateBoss();
+            updateBossBullets();
             checkCollisions();
             updateParticles();
             
